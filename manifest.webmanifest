@@ -1,0 +1,15 @@
+{
+  "name":"Just Us ♡",
+  "short_name":"Just Us",
+  "start_url":"./",
+  "display":"standalone",
+  "background_color":"#090b12",
+  "theme_color":"#090b12",
+  "description":"Private space for two.",
+  "icons":[{"src":"./icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}],
+  "shortcuts":[
+    {"name":"Chat","short_name":"Chat","url":"./?tab=chat","icons":[{"src":"./icon.svg","sizes":"any"}]},
+    {"name":"Moments","short_name":"Moments","url":"./?tab=moments","icons":[{"src":"./icon.svg","sizes":"any"}]},
+    {"name":"Play","short_name":"Play","url":"./?tab=play","icons":[{"src":"./icon.svg","sizes":"any"}]}
+  ]
+}

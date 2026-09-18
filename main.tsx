@@ -1,182 +1,130 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
-import {
-  ArrowLeft, ArrowRight, Bell, Camera, Check, CheckCheck, ChevronRight,
-  CircleUserRound, Copy, Download, File, FileText, Gamepad2, Image as ImageIcon,
-  LockKeyhole, Menu, MessageCircle, Mic, MicOff, MoreHorizontal, Paperclip,
-  Phone, Play, Plus, RefreshCw, Search, Send, Settings, ShieldCheck, Smile,
-  Sparkles, Square, Trash2, Upload, UserPlus, Users, Video, Volume2, VolumeX,
-  Wifi, X, Zap
-} from "lucide-react";
-import "./styles.css";
+import React,{useCallback,useEffect,useMemo,useRef,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {createClient,RealtimeChannel,SupabaseClient} from '@supabase/supabase-js';
+import {ArrowLeft,ArrowRight,Bell,Camera,Check,CheckCheck,ChevronDown,ChevronRight,Copy,Download,File as FileIcon,Gamepad2,Heart,Home,Image as ImageIcon,LockKeyhole,Menu,MessageCircle,Mic,MicOff,MoreVertical,Paperclip,Phone,Play,Plus,RefreshCw,ScreenShare,Send,Settings,ShieldCheck,Smile,Sparkles,Square,Trash2,Upload,UserRound,Users,Video,Volume2,VolumeX,Wifi,WifiOff,X,Zap} from 'lucide-react';
+import './styles.css';
 
-type Screen = "welcome" | "security" | "profile" | "app";
-type Tab = "chat" | "games" | "media" | "profile";
-type Toast = { id:number; text:string; kind?: "success"|"error"|"info" };
-type Message = { id:number; text:string; time:string; status:"sent"|"delivered"|"read"; mine:boolean; reply?:string };
-type MediaItem = { id:number; name:string; url:string; type:"image"|"file"; from:string; time:string };
+type Tab='home'|'chat'|'moments'|'play';
+type Message={id:string;room_id?:string;sender_id:string;text:string;kind:'text'|'image'|'file';file_url?:string;file_name?:string;mime_type?:string;created_at:string;status?:'sent'|'delivered'|'read';reply_to?:string};
+type Moment={id:string;sender_id:string;caption:string;image_url:string;created_at:string};
+type Profile={name:string;code:string;avatar:string};
+type Toast={id:number;text:string;kind:'info'|'success'|'error'};
 
-const uid = () => Math.floor(Date.now() + Math.random()*1000);
-const timeNow = () => new Intl.DateTimeFormat([], {hour:"2-digit", minute:"2-digit"}).format(new Date());
+const SUPABASE_URL=import.meta.env.VITE_SUPABASE_URL||'';
+const SUPABASE_ANON_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY||'';
+const sb:SupabaseClient|null=SUPABASE_URL&&SUPABASE_ANON_KEY?createClient(SUPABASE_URL,SUPABASE_ANON_KEY):null;
+const uid=()=>crypto.randomUUID?.()||`${Date.now()}-${Math.random()}`;
+const clock=(d=new Date())=>new Intl.DateTimeFormat([], {hour:'2-digit',minute:'2-digit'}).format(d);
+const ago=(iso:string)=>{const n=Date.now()-new Date(iso).getTime();const m=Math.floor(n/60000);if(m<1)return'online';if(m<60)return`${m} min ago`;const h=Math.floor(m/60);if(h<24)return`${h} hr ago`;return`${Math.floor(h/24)} d ago`};
+function haptic(type:'light'|'medium'|'success'|'error'='light'){try{navigator.vibrate?.(type==='success'?[8,30,8]:type==='error'?[18,40,18]:type==='medium'?16:8)}catch{}}
+function App(){
+ const [tab,setTab]=useState<Tab>((new URLSearchParams(location.search).get('tab') as Tab)||'home');
+ const [step,setStep]=useState<'welcome'|'privacy'|'profile'|'room'|'app'>(()=>localStorage.getItem('justus.profile')?'room':'welcome');
+ const [profile,setProfile]=useState<Profile>(()=>JSON.parse(localStorage.getItem('justus.profile')||'{"name":"","code":"","avatar":""}'));
+ const [roomCode,setRoomCode]=useState(()=>localStorage.getItem('justus.room')||'');
+ const [roomId,setRoomId]=useState('');
+ const [userId,setUserId]=useState(()=>localStorage.getItem('justus.uid')||uid());
+ const [partner,setPartner]=useState<{id:string;name:string;avatar:string;lastSeen:number;online:boolean}|null>(null);
+ const [messages,setMessages]=useState<Message[]>([]);
+ const [moments,setMoments]=useState<Moment[]>([]);
+ const [toasts,setToasts]=useState<Toast[]>([]);
+ const [backendReady,setBackendReady]=useState(!!sb);
+ const [channel,setChannel]=useState<RealtimeChannel|null>(null);
+ const [installPrompt,setInstallPrompt]=useState<any>(null);
+ const [call,setCall]=useState<CallState|null>(null);const [pendingSignal,setPendingSignal]=useState<any>(null);
+ useEffect(()=>{localStorage.setItem('justus.uid',userId)},[userId]);
+ useEffect(()=>{const f=(e:any)=>{e.preventDefault();setInstallPrompt(e)};window.addEventListener('beforeinstallprompt',f);return()=>window.removeEventListener('beforeinstallprompt',f)},[]);
+ const toast=useCallback((text:string,kind:Toast['kind']='info')=>{const id=Date.now();setToasts(v=>[...v,{id,text,kind}]);setTimeout(()=>setToasts(v=>v.filter(x=>x.id!==id)),2800)},[]);
+ const saveProfile=(p:Profile)=>{setProfile(p);localStorage.setItem('justus.profile',JSON.stringify(p))};
+ const createRoom=()=>{const c=String(Math.floor(10000+Math.random()*90000));setRoomCode(c);localStorage.setItem('justus.room',c);setStep('app');toast('Private room created','success');haptic('success')};
+ const joinRoom=async(c:string)=>{if(!/^\d{5}$/.test(c))return toast('Enter the 5-digit room code','error');setRoomCode(c);localStorage.setItem('justus.room',c);setStep('app');toast('Joining room…','info');haptic('medium')};
+ useEffect(()=>{if(!sb||step!=='app'||!roomCode)return;let alive=true;(async()=>{const {data}=await sb.auth.getSession();if(!data.session){const r=await sb.auth.signInAnonymously();if(r.error){setBackendReady(false);toast('Backend authentication is not configured','error');return}}if(!alive)return;const {data:room}=await sb.from('rooms').select('id').eq('code',roomCode).maybeSingle();if(room)setRoomId(room.id);else{const {data:nr}=await sb.from('rooms').insert({code:roomCode}).select('id').single();if(nr)setRoomId(nr.id)}setBackendReady(true)})();return()=>{alive=false}},[step,roomCode]);
+ useEffect(()=>{
+  if(!sb||!roomId||!profile.name)return;
+  let ch:RealtimeChannel|undefined; let beat:number|undefined; let alive=true;
+  (async()=>{
+   const {data:{user}}=await sb!.auth.getUser(); if(!user||!alive)return; setUserId(user.id);
+   await sb!.from('room_members').upsert({room_id:roomId,user_id:user.id,display_name:profile.name,avatar_url:profile.avatar||null,last_seen:new Date().toISOString()},{onConflict:'room_id,user_id'});
+   const {data:members}=await sb!.from('room_members').select('*').eq('room_id',roomId).neq('user_id',user.id).limit(1);
+   if(members?.[0])setPartner({id:members[0].user_id,name:members[0].display_name,avatar:members[0].avatar_url||'',lastSeen:new Date(members[0].last_seen).getTime(),online:false});
+   const {data:ms}=await sb!.from('messages').select('*').eq('room_id',roomId).order('created_at',{ascending:true}); if(ms)setMessages(ms as Message[]);
+   const {data:mm}=await sb!.from('moments').select('*').eq('room_id',roomId).order('created_at',{ascending:false}); if(mm)setMoments(mm as Moment[]);
+   ch=sb!.channel(`room:${roomId}`,{config:{presence:{key:user.id}}})
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages',filter:`room_id=eq.${roomId}`},p=>{const m=p.new as Message;setMessages(v=>v.some(x=>x.id===m.id)?v:[...v,m])})
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'moments',filter:`room_id=eq.${roomId}`},p=>setMoments(v=>v.some(x=>x.id===(p.new as Moment).id)?v:[p.new as Moment,...v]))
+    .on('presence',{event:'sync'},()=>{const state=ch!.presenceState();const others=Object.entries(state).filter(([k])=>k!==user.id);if(others[0]){const x:any=others[0][1][0];setPartner(p=>({id:others[0][0],name:x.name||p?.name||'Your person',avatar:x.avatar||p?.avatar||'',lastSeen:Date.now(),online:true}))}else setPartner(p=>p?{...p,online:false,lastSeen:Date.now()}:null)})
+    .on('broadcast',{event:'call-signal'},({payload}:any)=>{window.dispatchEvent(new CustomEvent('justus-call',{detail:payload}));if(payload?.from!==user.id&&payload?.type==='offer'){setPendingSignal(payload);setCall({video:!!payload.video,initiator:false})}});
+   await ch.subscribe(async status=>{if(status==='SUBSCRIBED')await ch!.track({name:profile.name,avatar:profile.avatar||'',online:true})});
+   setChannel(ch); beat=window.setInterval(()=>{sb!.from('room_members').update({last_seen:new Date().toISOString()}).eq('room_id',roomId).eq('user_id',user.id)},30000);
+  })();
+  return()=>{alive=false;if(beat)clearInterval(beat);if(ch)sb!.removeChannel(ch);setChannel(null)};
+ },[roomId,profile.name,profile.avatar]);
 
-function haptic(level:"light"|"medium"|"success"|"error"="light") {
-  const patterns = {light:8, medium:16, success:[8,30,8], error:[18,40,18]} as const;
-  try { if ("vibrate" in navigator) navigator.vibrate(patterns[level]); } catch {}
+ const sendMessage=async(m:Omit<Message,'id'|'sender_id'|'created_at'>)=>{const base={...m,id:uid(),sender_id:userId,created_at:new Date().toISOString(),status:'sent' as const};if(sb&&roomId){const {error}=await sb.from('messages').insert({...base,room_id:roomId});if(error){toast('Message could not be sent','error');return}}else setMessages(v=>[...v,base]);haptic('light')};
+ const sendMoment=async(caption:string,file:File)=>{const localUrl=URL.createObjectURL(file);if(sb&&roomId){const path=`${roomId}/${uid()}-${file.name.replace(/[^a-z0-9._-]/gi,'_')}`;const up=await sb.storage.from('moments').upload(path,file,{upsert:false});if(up.error){toast('Storage bucket is not configured; using local preview','error');setMoments(v=>[{id:uid(),sender_id:userId,caption,image_url:localUrl,created_at:new Date().toISOString()},...v]);return}const {data}=sb.storage.from('moments').getPublicUrl(path);const {data:row,error}=await sb.from('moments').insert({room_id:roomId,sender_id:userId,caption,image_url:data.publicUrl}).select('*').single();if(error){toast('Moment record failed','error');return}setMoments(v=>[row as Moment,...v]);toast('Moment shared','success')}else{setMoments(v=>[{id:uid(),sender_id:userId,caption,image_url:localUrl,created_at:new Date().toISOString()},...v]);toast('Moment added locally','success')}haptic('success')};
+ const leave=()=>{localStorage.removeItem('justus.room');setRoomCode('');setRoomId('');setStep('room');toast('Left room','info')};
+ if(step!=='app')return <><Onboarding step={step} setStep={setStep} profile={profile} saveProfile={saveProfile} roomCode={roomCode} setRoomCode={setRoomCode} createRoom={createRoom} joinRoom={joinRoom} toast={toast}/><Toasts items={toasts}/></>;
+ return <div className="app"><Header profile={profile} partner={partner} onCall={(video)=>setCall({video,initiator:true})} toast={toast} online={backendReady}/><main>{tab==='home'&&<HomeView profile={profile} partner={partner} roomCode={roomCode} backendReady={backendReady} setTab={setTab} installPrompt={installPrompt} toast={toast}/>} {tab==='chat'&&<ChatView messages={messages} sendMessage={sendMessage} partner={partner} profile={profile} toast={toast}/>} {tab==='moments'&&<MomentsView moments={moments} userId={userId} sendMoment={sendMoment} toast={toast}/>} {tab==='play'&&<GamesView toast={toast}/>}</main><Bottom tab={tab} setTab={setTab}/>{call&&<CallOverlay call={call} profile={profile} partner={partner} channel={channel} userId={userId} pendingSignal={pendingSignal} close={()=>{setCall(null);setPendingSignal(null)}} toast={toast}/>}<Toasts items={toasts}/><button className="floating-help" onClick={()=>toast('Long-press a message for actions • calls require the live backend','info')} aria-label="Help">?</button></div>;
 }
-
-function useToasts() {
-  const [toasts,setToasts] = useState<Toast[]>([]);
-  const toast = (text:string, kind:Toast["kind"]="info") => {
-    const id=uid(); setToasts(v=>[...v,{id,text,kind}]);
-    window.setTimeout(()=>setToasts(v=>v.filter(x=>x.id!==id)),2600);
-  };
-  return {toasts,toast};
+function Onboarding({step,setStep,profile,saveProfile,roomCode,setRoomCode,createRoom,joinRoom,toast}:{step:any;setStep:any;profile:Profile;saveProfile:(p:Profile)=>void;roomCode:string;setRoomCode:(s:string)=>void;createRoom:()=>void;joinRoom:(s:string)=>void;toast:any}){
+ const [avatar,setAvatar]=useState(profile.avatar);const [name,setName]=useState(profile.name);const [code,setCode]=useState(profile.code||String(Math.floor(10000+Math.random()*90000)));const [zoom,setZoom]=useState(1);const [pos,setPos]=useState({x:0,y:0});
+ const choose=(e:React.ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>setAvatar(String(r.result));r.readAsDataURL(f)};
+ if(step==='welcome')return <div className="entry"><div className="entry-orb"/><section className="welcome-card"><div className="brand-mark"><Sparkles size={19}/></div><h1>Just Us <span>♡</span></h1><p>A tiny private world for two.<br/>Take a breath. This space is yours.</p><button className="primary" onClick={()=>{setStep('privacy');haptic('medium')}}>Enter our little world <Sparkles size={16}/></button><small>First-time setup · works as a mobile web app</small></section></div>;
+ if(step==='privacy')return <div className="entry"><section className="article-card"><div className="eyebrow">A NOTE FROM JUST US</div><h2>Private by design</h2><p>Messages, moments, and calls should belong to the two people using them. This interface is prepared for a client-side encrypted architecture.</p><div className="privacy-note"><LockKeyhole size={18}/><div><b>Important</b><span>A visual interface does not create end-to-end encryption. Production E2EE must use audited cryptography, authenticated key exchange and secure key storage.</span></div></div><button className="primary" onClick={()=>setStep('profile')}>Continue <ArrowRight size={17}/></button></section></div>;
+ if(step==='profile')return <div className="entry"><section className="profile-card"><div className="eyebrow">YOUR PROFILE</div><h2>Just you two</h2><p>Choose the photo and name your person will see.</p><label className="avatar-upload"><input type="file" accept="image/*" onChange={choose}/>{avatar?<img src={avatar} style={{transform:`scale(${zoom}) translate(${pos.x}px,${pos.y}px)`}}/>:<UserRound size={42}/>}<span><Camera size={15}/> Add profile photo</span></label>{avatar&&<div className="crop-tools"><label>Zoom <input type="range" min="1" max="2" step="0.05" value={zoom} onChange={e=>setZoom(Number(e.target.value))}/></label><label>Horizontal <input type="range" min="-35" max="35" value={pos.x} onChange={e=>setPos({...pos,x:Number(e.target.value)})}/></label><label>Vertical <input type="range" min="-35" max="35" value={pos.y} onChange={e=>setPos({...pos,y:Number(e.target.value)})}/></label></div>}<label className="field"><span>Name</span><input value={name} maxLength={40} onChange={e=>setName(e.target.value)} placeholder="Your name"/></label><div className="code-row"><div><span>Private code</span><b>{code}</b></div><button className="icon-btn" onClick={()=>setCode(String(Math.floor(10000+Math.random()*90000)))}><RefreshCw size={17}/></button><button className="icon-btn" onClick={()=>{navigator.clipboard?.writeText(code);toast('Code copied','success')}}><Copy size={17}/></button></div><button className="primary" onClick={()=>{if(!name.trim())return toast('Enter your name','error');saveProfile({name,code,avatar});setStep('room');haptic('success')}}>Continue <ArrowRight size={17}/></button></section></div>;
+ return <div className="entry"><section className="room-card"><Avatar src={avatar} name={name||'You'} /><div className="eyebrow">PRIVATE ROOM</div><h2>Just you two</h2><p>Create a room or enter the 5-digit code shared by your person.</p><button className="primary" onClick={createRoom}>Create private room <Sparkles size={16}/></button><div className="or">OR</div><input className="room-input" inputMode="numeric" maxLength={5} value={roomCode} onChange={e=>setRoomCode(e.target.value.replace(/\D/g,'').slice(0,5))} placeholder="ROOM CODE"/><button className="secondary" onClick={()=>joinRoom(roomCode)}>Join with code <ArrowRight size={16}/></button><p className="tiny">Use the same code on the other phone. With the live backend configured, both devices share one room timeline and presence.</p></section></div>
 }
-
-function Toasts({items}:{items:Toast[]}) {
-  return <div className="toast-stack" aria-live="polite">{items.map(t=>
-    <div className={`toast ${t.kind||""}`} key={t.id}><span className="toast-dot"><Check size={13}/></span>{t.text}</div>
-  )}</div>;
+function Header({profile,partner,onCall,toast,online}:{profile:Profile;partner:any;onCall:(v:boolean)=>void;toast:any;online:boolean}){return <header><div className="header-title"><span className="wordmark">Just Us ♡</span><span className={`space-state ${online?'live':''}`}><i/> {online?'live space':'demo space'}</span></div><div className="partner-strip"><Avatar src={partner?.avatar} name={partner?.name||'Your person'} small/><div><b>{partner?.name||'Your person'}</b><span className={partner?.online?'online':''}>{partner?.online?'online':partner?ago(new Date(partner.lastSeen).toISOString()):'waiting to join'}</span></div><div className="header-actions"><button className="icon-btn" onClick={()=>onCall(false)} aria-label="Voice call"><Phone size={19}/></button><button className="icon-btn" onClick={()=>onCall(true)} aria-label="Video call"><Video size={20}/></button><button className="icon-btn" onClick={()=>toast('Room settings are in Profile','info')}><MoreVertical size={20}/></button></div></div></header>}
+function Bottom({tab,setTab}:{tab:Tab;setTab:(t:Tab)=>void}){return <nav className="bottom"><button className={tab==='home'?'active':''} onClick={()=>setTab('home')}><Home/><span>Home</span></button><button className={tab==='chat'?'active':''} onClick={()=>setTab('chat')}><Heart/><span>Chat</span></button><button className={tab==='moments'?'active':''} onClick={()=>setTab('moments')}><Sparkles/><span>Moments</span></button><button className={tab==='play'?'active':''} onClick={()=>setTab('play')}><Gamepad2/><span>Play</span></button></nav>}
+function HomeView({profile,partner,roomCode,backendReady,setTab,installPrompt,toast}:{profile:Profile;partner:any;roomCode:string;backendReady:boolean;setTab:(t:Tab)=>void;installPrompt:any;toast:any}){return <section className="home page"><div className="home-hero"><span className="eyebrow">YOUR LITTLE WORLD</span><h2>Just you two</h2><p>Room <b>{roomCode}</b> · {partner?.online?'together now':'waiting for your person'}</p></div><div className="home-grid"><ActionCard icon="💬" title="Chat" text="Private conversation, replies and attachments." onClick={()=>setTab('chat')}/><ActionCard icon="📹" title="Voice & video" text="WebRTC calling with mute, camera, share and decline." onClick={()=>toast('Tap the phone/video icon in the header to start a call','info')}/><ActionCard icon="📸" title="Moments" text="Send a photo with your own 15–20 word message." onClick={()=>setTab('moments')}/><ActionCard icon="🎲" title="Games" text="Play Ludo or Carrom together." onClick={()=>setTab('play')}/><ActionCard icon="🔐" title="Privacy" text="Real E2EE requires the configured production crypto layer." onClick={()=>toast('See Profile → Privacy & setup','info')}/><ActionCard icon="📱" title="Add to home" text={installPrompt?'Install Just Us like an app.':'Use your browser menu → Add to Home screen.'} onClick={async()=>{if(installPrompt){await installPrompt.prompt();setTimeout(()=>location.reload(),500)}else toast('Chrome: ⋮ → Add to Home screen → Add','info')}}/></div></section>}
+function ActionCard({icon,title,text,onClick}:{icon:string;title:string;text:string;onClick:()=>void}){return <button className="action-card" onClick={()=>{haptic('light');onClick()}}><span className="emoji-icon">{icon}</span><div><h3>{title}</h3><p>{text}</p></div><ChevronRight/></button>}
+function Avatar({src,name,small=false}:{src?:string;name:string;small?:boolean}){return <div className={`avatar ${small?'small':''}`}>{src?<img src={src} alt=""/>:<span>{name?.trim()?.[0]?.toUpperCase()||'♡'}</span>}</div>}
+function ChatView({messages,sendMessage,partner,profile,toast}:{messages:Message[];sendMessage:(m:any)=>Promise<void>;partner:any;profile:Profile;toast:any}){
+ const [text,setText]=useState('');
+ const [reply,setReply]=useState<Message|null>(null);
+ const [emoji,setEmoji]=useState(false);
+ const end=useRef<HTMLDivElement>(null);
+ useEffect(()=>{end.current?.scrollIntoView({behavior:'smooth'})},[messages]);
+ const send=async()=>{if(!text.trim())return;await sendMessage({text:text.trim(),kind:'text',reply_to:reply?.id});setText('');setReply(null)};
+ const file=async(e:React.ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(!f)return;const url=URL.createObjectURL(f);await sendMessage({text:'',kind:f.type.startsWith('image/')?'image':'file',file_url:url,file_name:f.name,mime_type:f.type});e.target.value=''};
+ return <section className="chat page">
+  <div className="chat-status"><span>🔒</span> Messages are private-ready. <b>{partner?.online?'Your person is online':'Waiting for your person'}</b></div>
+  <div className="messages">
+   {messages.length===0&&<div className="empty"><MessageCircle size={35}/><h3>Start your little conversation</h3><p>Your first message will appear here.</p></div>}
+   {messages.map(m=><MessageBubble key={m.id} m={m} mine={m.sender_id===localStorage.getItem('justus.uid')} onReply={()=>setReply(m)} onDelete={()=>toast('Delete can be wired to the database policy','info')}/>)}
+   <div ref={end}/>
+  </div>
+  {reply&&<div className="reply-bar"><span>Replying to: {reply.text||reply.file_name}</span><button onClick={()=>setReply(null)}><X size={16}/></button></div>}
+  {emoji&&<div className="emoji-tray">{['❤️','🥹','😘','🫶','✨','😂','😍','😌','💫','🤍'].map(e=><button key={e} onClick={()=>{setText(v=>v+e);setEmoji(false)}}>{e}</button>)}</div>}
+  <div className="composer"><button className="icon-btn" onClick={()=>setEmoji(v=>!v)}><Smile/></button><label className="icon-btn"><Paperclip/><input hidden type="file" accept="image/*,.pdf,.doc,.docx,.zip" onChange={file}/></label><input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')send()}} placeholder="Write something…"/><button className={`send ${text.trim()?'ready':''}`} onClick={send}><Send size={18}/></button></div>
+ </section>
 }
-
-function App() {
-  const [screen,setScreen]=useState<Screen>("welcome");
-  const [onboard,setOnboard]=useState(0);
-  const [tab,setTab]=useState<Tab>("chat");
-  const [profile,setProfile]=useState({name:"",code:"ORBIT-7K2P",avatar:""});
-  const [room,setRoom]=useState("ROOM-NOVA-4821");
-  const [partnerOnline,setPartnerOnline]=useState(true);
-  const [messages,setMessages]=useState<Message[]>([
-    {id:1,text:"Hey! Welcome to Orbit 👋",time:"10:42",status:"read",mine:false},
-    {id:2,text:"Everything feels really smooth here.",time:"10:43",status:"read",mine:false},
-    {id:3,text:"That’s the idea. Private, playful, and simple.",time:"10:44",status:"read",mine:true}
-  ]);
-  const [media,setMedia]=useState<MediaItem[]>([]);
-  const {toasts,toast}=useToasts();
-
-  useEffect(()=>{
-    const onShot=()=>toast("Screenshot detected","info");
-    // There is no standard web event for OS screenshots. Keep this hook intentionally
-    // conservative: browsers that expose a vendor event can wire it here.
-    window.addEventListener("orbit:screenshot",onShot);
-    return ()=>window.removeEventListener("orbit:screenshot",onShot);
-  },[]);
-
-  const next=(fn:()=>void)=>{haptic("light"); fn();};
-  const generateCode=()=>{setProfile(p=>({...p,code:"ORBIT-"+Math.random().toString(36).slice(2,6).toUpperCase()+Math.floor(10+Math.random()*90)}));toast("Private code regenerated","success");haptic("success")};
-  const createRoom=()=>{const r="ROOM-"+Math.random().toString(36).slice(2,7).toUpperCase()+"-"+Math.floor(100+Math.random()*900);setRoom(r);toast("Random room created","success");haptic("success")};
-  const copy=(s:string,label:string)=>{navigator.clipboard?.writeText(s);toast(`${label} copied`,"success");haptic("light")};
-
-  if(screen!=="app") return <><Entry screen={screen} onboard={onboard} setOnboard={setOnboard} profile={profile} setProfile={setProfile} room={room} setRoom={setRoom} next={next} toast={toast} generateCode={generateCode} createRoom={createRoom} finish={()=>setScreen("app")} copy={copy}/><Toasts items={toasts}/></>;
-
-  return <div className="shell">
-    <AppHeader tab={tab} profile={profile} partnerOnline={partnerOnline} setPartnerOnline={setPartnerOnline} toast={toast} haptic={haptic}/>
-    <main className="app-main">
-      {tab==="chat" && <Chat messages={messages} setMessages={setMessages} toast={toast} haptic={haptic} media={media} setMedia={setMedia}/>}
-      {tab==="games" && <Games toast={toast} haptic={haptic}/>}
-      {tab==="media" && <Media media={media} toast={toast}/>}
-      {tab==="profile" && <Profile profile={profile} setProfile={setProfile} room={room} toast={toast} copy={copy}/>}
-    </main>
-    <BottomNav tab={tab} setTab={(t)=>{haptic("light");setTab(t)}}/>
-    <Toasts items={toasts}/>
-  </div>;
+function MessageBubble({m,mine,onReply,onDelete}:{m:Message;mine:boolean;onReply:()=>void;onDelete:()=>void}){return <div className={`message-row ${mine?'mine':''}`} onContextMenu={e=>{e.preventDefault();onReply()}}><div className="bubble">{m.reply_to&&<div className="reply-preview">↳ replied message</div>}{m.kind==='image'&&m.file_url?<img className="chat-image" src={m.file_url} alt="shared"/>:m.kind==='file'?<div className="file-message"><FileIcon/><span>{m.file_name||'Attachment'}</span><Download size={16}/></div>:<span>{m.text}</span>}<small>{clock(new Date(m.created_at))} {mine&&(m.status==='read'?<CheckCheck size={13}/>:<Check size={13}/>)}</small><div className="bubble-actions"><button onClick={onReply}>Reply</button><button onClick={onDelete}><Trash2 size={12}/></button></div></div></div>}
+function MomentsView({moments,userId,sendMoment,toast}:{moments:Moment[];userId:string;sendMoment:(c:string,f:File)=>Promise<void>;toast:any}){const [file,setFile]=useState<File|null>(null);const [caption,setCaption]=useState('');const [preview,setPreview]=useState('');const words=caption.trim()?caption.trim().split(/\s+/).length:0;const choose=(e:React.ChangeEvent<HTMLInputElement>)=>{const f=e.target.files?.[0];if(!f)return;setFile(f);setPreview(URL.createObjectURL(f))};const send=async()=>{if(!file)return toast('Choose a photo first','error');if(words>20)return toast('Keep the message to 20 words','error');await sendMoment(caption.trim(),file);setFile(null);setPreview('');setCaption('')};return <section className="page"><div className="page-title"><div><span className="eyebrow">MOMENTS</span><h2>Little surprises</h2><p>One photo can become the other person’s little surprise.</p></div></div><div className="moment-composer"><label className="photo-picker">{preview?<img src={preview} alt="preview"/>:<><ImageIcon size={30}/><span>Choose photo</span></>}<input hidden type="file" accept="image/*" onChange={choose}/></label><input value={caption} onChange={e=>setCaption(e.target.value)} placeholder="Write anything you want…"/><div className="moment-row"><span>{words}/20 words</span><button className="primary small-btn" onClick={send}>Done & share <Send size={15}/></button></div></div><div className="moments-grid">{moments.map(m=><article className="moment" key={m.id}><img src={m.image_url} alt="shared moment"/><div><span>{m.sender_id===userId?'You':'Your person'} · {ago(m.created_at)}</span><p>{m.caption||'♡'}</p></div></article>)}</div></section>}
+function GamesView({toast}:{toast:any}){const [game,setGame]=useState<'hub'|'ludo'|'carrom'>('hub');if(game==='ludo')return <Ludo back={()=>setGame('hub')} toast={toast}/>;if(game==='carrom')return <Carrom back={()=>setGame('hub')} toast={toast}/>;return <section className="page"><div className="page-title"><div><span className="eyebrow">PLAY TOGETHER</span><h2>Two-player room</h2><p>Animated local play; connect game state to Realtime for remote turns.</p></div></div><div className="game-select"><button onClick={()=>setGame('ludo')}><span>🎲</span><h3>Ludo</h3><p>4 tokens each · six to enter · captures · safe cells · home</p><ChevronRight/></button><button onClick={()=>setGame('carrom')}><span>🪵</span><h3>Carrom</h3><p>Striker · coins · queen · pockets · scoring · turn system</p><ChevronRight/></button></div></section>}
+const PATH=Array.from({length:52},(_,i)=>i);const SAFE=new Set([0,8,13,21,26,34,39,47]);
+function Ludo({back,toast}:{back:()=>void;toast:any}){
+ const [turn,setTurn]=useState(0),[dice,setDice]=useState(1),[rolling,setRolling]=useState(false),[tokens,setTokens]=useState<number[][]>([[-1,-1,-1,-1],[-1,-1,-1,-1]]),[winner,setWinner]=useState<number|null>(null);
+ const roll=()=>{if(rolling||winner!==null)return;setRolling(true);let n=0;const t=setInterval(()=>{setDice(1+Math.floor(Math.random()*6));if(++n>=9){clearInterval(t);const d=1+Math.floor(Math.random()*6);setDice(d);setRolling(false);setTokens(ts=>{const next=ts.map(a=>[...a]);const active=next[turn];let idx=active.findIndex(x=>x>=0&&x<56);if(d===6){const base=active.findIndex(x=>x===-1);if(base>=0)idx=base}if(idx<0)idx=active.findIndex(x=>x>=0&&x<56);if(idx>=0){let pos=active[idx];if(pos===-1){if(d===6)pos=0}else{pos=Math.min(56,pos+d)}active[idx]=pos;if(pos>=0&&pos<52){const global=(pos+(turn?26:0))%52;if(!SAFE.has(global)){const other=1-turn;next[other]=next[other].map(o=>{const og=o<0?-99:(o+(other?26:0))%52;return og===global&&o<52?-1:o})}}}if(active.every(x=>x===56)){setWinner(turn);toast(`Player ${turn+1} reached home!`,'success');haptic('success')}if(d!==6)setTurn(x=>1-x);return next})}},75)};
+ const reset=()=>{setTokens([[-1,-1,-1,-1],[-1,-1,-1,-1]]);setTurn(0);setWinner(null);setDice(1)};
+ return <section className="game-screen"><div className="game-top"><button className="icon-btn" onClick={back}><ArrowLeft/></button><div><span>LUDO</span><b>{winner!==null?`Player ${winner+1} wins!`:`Player ${turn+1}'s turn`}</b></div><button className="icon-btn" onClick={reset}><RefreshCw/></button></div><div className="ludo-board"><div className="base red"><div className="base-title">PLAYER 2</div>{tokens[1].map((x,i)=><span key={i} className="home-token">{x===56?'✓':i+1}</span>)}</div><div className="track">{PATH.map(i=><span key={i} className={`${SAFE.has(i)?'safe ':''}${i===0?'start':''}`}>{SAFE.has(i)?'★':''}</span>)}</div><div className="base green"><div className="base-title">PLAYER 1</div>{tokens[0].map((x,i)=><span key={i} className="home-token">{x===56?'✓':i+1}</span>)}</div><div className="home-center">HOME<br/>♡</div>{tokens.flatMap((a,p)=>a.map((pos,i)=>pos>=0&&pos<52?(()=>{const g=(pos+(p?26:0))%52;const ang=(g/52)*Math.PI*2-Math.PI/2;return <span key={`${p}-${i}`} className={`moving-token p${p}`} style={{left:`calc(50% + ${Math.cos(ang)*36}% - 14px)`,top:`calc(50% + ${Math.sin(ang)*36}% - 14px)`}}>{p?'R':'G'}{i+1}</span>})():null))}</div><div className="ludo-controls"><button className={`dice ${rolling?'rolling':''}`} onClick={roll}>{dice}</button><p>{winner!==null?'Game over — restart to play again':dice===6?'Six! Token enters from base; roll again.':'Roll the dice for the active player.'}</p><div className="token-strip"><span>🟢 {tokens[0].filter(x=>x===56).length}/4 home</span><span>🔴 {tokens[1].filter(x=>x===56).length}/4 home</span></div></div><p className="game-note">★ safe cells cannot be captured. Landing on an opponent token captures it and sends it back to base.</p></section>
 }
+function Carrom({back,toast}:{back:()=>void;toast:any}){const ref=useRef<HTMLCanvasElement>(null);const [score,setScore]=useState([0,0]);const [turn,setTurn]=useState(0);const [aim,setAim]=useState({x:50,y:88});const [coins,setCoins]=useState(()=>Array.from({length:12},(_,i)=>({x:50+(i%6-2.5)*4,y:50+(Math.floor(i/6)-.5)*4,vx:0,vy:0,id:i,p:i===0?'queen':'coin'})));useEffect(()=>{const c=ref.current;if(!c)return;const ctx=c.getContext('2d')!;let raf=0;const d=()=>{const r=c.getBoundingClientRect();const sx=c.width/r.width,sy=c.height/r.height;ctx.clearRect(0,0,c.width,c.height);ctx.fillStyle='#d6b58a';ctx.fillRect(0,0,c.width,c.height);ctx.fillStyle='#6b4327';ctx.fillRect(22,22,c.width-44,c.height-44);ctx.strokeStyle='#f2e1bd';ctx.lineWidth=5;ctx.strokeRect(44,44,c.width-88,c.height-88);[[55,55],[c.width-55,55],[55,c.height-55],[c.width-55,c.height-55]].forEach(([x,y])=>{ctx.fillStyle='#17120f';ctx.beginPath();ctx.arc(x,y,17,0,7);ctx.fill()});coins.forEach(o=>{o.x+=o.vx;o.y+=o.vy;o.vx*=.985;o.vy*=.985;if(o.x<10||o.x>90)o.vx*=-.85;if(o.y<10||o.y>90)o.vy*=-.85;ctx.fillStyle=o.p==='queen'?'#b54b78':o.p==='coin'?(o.id%2?'#f4e7cf':'#242024'):'#fff';ctx.beginPath();ctx.arc(o.x/100*c.width,o.y/100*c.height,14,0,7);ctx.fill();ctx.strokeStyle='#ffffff55';ctx.stroke()});ctx.strokeStyle='#ffffff77';ctx.beginPath();ctx.moveTo(aim.x/100*c.width,aim.y/100*c.height);ctx.lineTo(50/100*c.width,82/100*c.height);ctx.stroke();raf=requestAnimationFrame(d)};d();return()=>cancelAnimationFrame(raf)},[coins,aim]);const shoot=()=>{const dx=50-aim.x,dy=82-aim.y;setCoins(v=>v.map((o,i)=>i===0?{...o,vx:dx*.09,vy:dy*.09}:o));haptic('medium');setTimeout(()=>{setScore(s=>{const n=[...s];n[turn]+=1;return n});setTurn(t=>1-t)},1200)};const pointer=(e:React.PointerEvent)=>{const r=ref.current!.getBoundingClientRect();setAim({x:(e.clientX-r.left)/r.width*100,y:(e.clientY-r.top)/r.height*100})};return <section className="game-screen"><div className="game-top"><button className="icon-btn" onClick={back}><ArrowLeft/></button><div><span>CARROM</span><b>Player {turn+1}'s turn</b></div><div className="score">{score[0]} — {score[1]}</div></div><div className="carrom"><canvas ref={ref} width={700} height={700} onPointerMove={pointer} onPointerUp={shoot}/></div><p className="game-note">Drag/aim around the striker and release. Coins rebound from the rails; pocketing scores and changes turn. Queen is the pink coin.</p><button className="secondary" onClick={()=>{setScore([0,0]);setTurn(0);toast('Carrom reset','success')}}>Restart game <RefreshCw size={16}/></button></section>}
 
-function Entry({screen,onboard,setOnboard,profile,setProfile,room,setRoom,next,toast,generateCode,createRoom,finish,copy}:{screen:Screen,onboard:number,setOnboard:(n:number)=>void,profile:any,setProfile:any,room:string,setRoom:any,next:(f:()=>void)=>void,toast:any,generateCode:()=>void,createRoom:()=>void,finish:()=>void,copy:(s:string,l:string)=>void}) {
-  const go=(s:Screen)=>{haptic("medium"); if(s==="security") setOnboard(0); (window as any).__screen=s;};
-  // local state wrapper via DOM-free event flow
-  const [local,setLocal]=useState<Screen>(screen);
-  useEffect(()=>setLocal(screen),[screen]);
-  const transition=(s:Screen)=>{haptic("medium");setLocal(s)};
-  if(local==="welcome") return <div className="entry"><div className="entry-orb orb-a"/><div className="entry-orb orb-b"/><section className="hero">
-    <div className="brand"><div className="brand-mark"><Sparkles size={20}/></div><span>ORBIT</span></div>
-    <div className="hero-copy"><div className="eyebrow"><span className="pulse"/>PRIVATE-FIRST COMMUNICATION</div><h1>Talk. Play.<br/><em>Stay close.</em></h1><p>A calm space for conversations, shared moments, and games — designed around control and clarity.</p></div>
-    <button className="primary huge" onClick={()=>transition("security")}>Enter <ArrowRight size={18}/></button>
-    <div className="entry-note"><LockKeyhole size={14}/> Privacy is a design goal, not a promise of cryptographic protection.</div>
-  </section><div className="entry-footer">ORBIT / 01</div></div>;
-
-  if(local==="security") {
-    const cards=[
-      {icon:<MessageCircle/>,title:"Communication",text:"Messages, media, presence and calls live in one focused workspace."},
-      {icon:<LockKeyhole/>,title:"Encryption",text:"Real end-to-end encryption needs a verified protocol, secure key handling, and a backend designed for it."},
-      {icon:<ShieldCheck/>,title:"Boundaries",text:"This browser app does not claim OS-level privacy, guaranteed screenshot detection, or E2E encryption by itself."}
-    ];
-    return <div className="entry"><div className="security-art"><div className="article"><div className="article-line long"/><div className="article-line"/><div className="article-line short"/><div className="article-photo"/></div><div className="phone"><div className="phone-notch"/><div className="mini-avatar">O</div><div className="mini-bubble">Encrypted-looking UI ≠ encryption.</div><div className="mini-bubble right">Exactly.</div></div></div>
-      <section className="security-content"><div className="step-label">02 / WHY IT MATTERS</div><h2>Privacy is a system,<br/><em>not a badge.</em></h2><p>Orbit’s interface is ready for secure infrastructure without pretending that UI alone makes communication secure.</p>
-      <div className="info-grid">{cards.map(c=><div className="info-card" key={c.title}>{c.icon}<strong>{c.title}</strong><span>{c.text}</span></div>)}</div>
-      <button className="primary" onClick={()=>transition("profile")}>Next <ArrowRight size={17}/></button></section>
-    </div>
-  }
-  return <div className="entry profile-entry"><section className="profile-card">
-    <div className="step-label">03 / YOUR PROFILE</div><h2>Make it yours.</h2><p>Use a display name and a private code to identify yourself inside this demo. In production, bind identity to secure authentication.</p>
-    <AvatarEditor value={profile.avatar} onChange={(avatar)=>setProfile({...profile,avatar})}/>
-    <label className="field"><span>Display name</span><input value={profile.name} onChange={e=>setProfile({...profile,name:e.target.value})} placeholder="e.g. Priya" maxLength={40}/></label>
-    <div className="code-row"><div><span>Private code</span><b>{profile.code}</b></div><button className="icon-btn" onClick={()=>copy(profile.code,"Private code")} aria-label="Copy code"><Copy size={17}/></button><button className="icon-btn" onClick={generateCode} aria-label="Regenerate code"><RefreshCw size={17}/></button></div>
-    <div className="room-box"><div><span>Random room</span><b>{room}</b></div><div className="inline-actions"><button className="ghost" onClick={createRoom}><RefreshCw size={15}/> New</button><button className="ghost" onClick={()=>copy(room,"Room ID")}><Copy size={15}/> Copy</button></div></div>
-    <button className="primary full" onClick={()=>{if(!profile.name.trim()){toast("Add a display name first","error");haptic("error");return} next(finish);toast("Profile saved","success")}}>Continue <ArrowRight size={17}/></button>
-  </section></div>
+type CallState={video:boolean;initiator:boolean};
+function CallOverlay({call,profile,partner,channel,userId,pendingSignal,close,toast}:{call:CallState;profile:Profile;partner:any;channel:RealtimeChannel|null;userId:string;pendingSignal:any;close:()=>void;toast:any}){
+ const localRef=useRef<HTMLVideoElement>(null),remoteRef=useRef<HTMLVideoElement>(null),pc=useRef<RTCPeerConnection|null>(null),stream=useRef<MediaStream|null>(null);
+ const [connected,setConnected]=useState(false),[muted,setMuted]=useState(false),[camera,setCamera]=useState(call.video),[sharing,setSharing]=useState(false),[facing,setFacing]=useState<'user'|'environment'>('user');
+ useEffect(()=>{let active=true;(async()=>{try{const s=await navigator.mediaDevices.getUserMedia({audio:true,video:call.video});if(!active)return;stream.current=s;if(localRef.current)localRef.current.srcObject=s;const peer=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]});pc.current=peer;s.getTracks().forEach(t=>peer.addTrack(t,s));peer.ontrack=e=>{if(remoteRef.current)remoteRef.current.srcObject=e.streams[0];setConnected(true)};peer.onicecandidate=e=>{if(e.candidate)channel?.send({type:'broadcast',event:'call-signal',payload:{from:userId,type:'ice',candidate:e.candidate}})};if(call.initiator){const offer=await peer.createOffer();await peer.setLocalDescription(offer);channel?.send({type:'broadcast',event:'call-signal',payload:{from:userId,type:'offer',video:call.video,offer}})}}catch{toast('Camera/microphone permission was denied','error')}})();return()=>{active=false;stream.current?.getTracks().forEach(t=>t.stop());pc.current?.close()}},[]);
+ useEffect(()=>{const onSignal=async(e:any)=>{const p=e.detail;if(!pc.current||p.from===userId)return;if(p.type==='answer'){await pc.current.setRemoteDescription(p.answer);setConnected(true)}else if(p.type==='ice'){try{await pc.current.addIceCandidate(p.candidate)}catch{}}else if(p.type==='decline'){toast('Call declined','info');close()}};window.addEventListener('justus-call',onSignal);return()=>window.removeEventListener('justus-call',onSignal)},[channel,userId,toast,close]);
+ useEffect(()=>{if(!pendingSignal||call.initiator||!pc.current)return;const accept=async()=>{const ok=window.confirm(`Incoming ${call.video?'video':'voice'} call from ${partner?.name||'your person'}. Accept?`);if(!ok){channel?.send({type:'broadcast',event:'call-signal',payload:{from:userId,type:'decline'}});close();return}await pc.current!.setRemoteDescription(pendingSignal.offer);const answer=await pc.current!.createAnswer();await pc.current!.setLocalDescription(answer);channel?.send({type:'broadcast',event:'call-signal',payload:{from:userId,type:'answer',answer}})};accept()},[pendingSignal,call.initiator,call.video,partner,channel,userId]);
+ const toggleMute=()=>{stream.current?.getAudioTracks().forEach(t=>t.enabled=!t.enabled);setMuted(v=>!v);haptic('light')};
+ const toggleCamera=()=>{stream.current?.getVideoTracks().forEach(t=>t.enabled=!t.enabled);setCamera(v=>!v)};
+ const flip=async()=>{if(!call.video)return;const next=facing==='user'?'environment':'user';try{const s=await navigator.mediaDevices.getUserMedia({audio:true,video:{facingMode:next}});const track=s.getVideoTracks()[0];const sender=pc.current?.getSenders().find(x=>x.track?.kind==='video');if(sender)await sender.replaceTrack(track);stream.current?.getVideoTracks().forEach(t=>t.stop());stream.current=s;if(localRef.current)localRef.current.srcObject=s;setFacing(next)}catch{toast('Camera switch is not available','error')}};
+ const share=async()=>{try{const s=await (navigator.mediaDevices as any).getDisplayMedia({video:true});const track=s.getVideoTracks()[0];const sender=pc.current?.getSenders().find(x=>x.track?.kind==='video');if(sender)await sender.replaceTrack(track);track.onended=()=>setSharing(false);setSharing(true)}catch{toast('Screen sharing cancelled or unsupported','info')}};
+ const decline=()=>{channel?.send({type:'broadcast',event:'call-signal',payload:{from:userId,type:'decline'}});close()};
+ return <div className="call-modal"><div className="call-top"><div><span>{connected?'connected':'connecting…'}</span><h2>{call.video?'Video call':'Voice call'}</h2></div><span className="call-state"><i className={connected?'on':''}/>{connected?'live':'waiting'}</span></div><div className="video-stage"><video ref={remoteRef} autoPlay playsInline className="remote"/><div className={`remote-placeholder ${connected?'hide':''}`}><span className="call-big-icon">{call.video?'📹':'📞'}</span><b>{partner?.name||'Your person'}</b><span>{connected?'Connected':'Waiting for answer'}</span></div>{call.video&&<video ref={localRef} autoPlay muted playsInline className="local"/>}</div><div className="call-controls"><button onClick={toggleMute} className={muted?'danger':''}>{muted?<MicOff/>:<Mic/>}<span>{muted?'Unmute':'Mute'}</span></button>{call.video&&<button onClick={toggleCamera}><Video/><span>{camera?'Camera':'Camera off'}</span></button>}{call.video&&<button onClick={flip}><RefreshCw/><span>Flip</span></button>}{call.video&&<button onClick={share}><ScreenShare/><span>{sharing?'Sharing':'Share'}</span></button>}<button className="decline" onClick={decline}><Phone/><span>Decline</span></button></div><p className="call-note">Real WebRTC media. The two devices must share the same configured room channel. STUN is included; production deployments should add TURN for difficult networks.</p></div>
 }
-
-function AvatarEditor({value,onChange}:{value:string,onChange:(v:string)=>void}) {
-  const ref=useRef<HTMLInputElement>(null);
-  return <div className="avatar-editor"><button className="avatar-big" onClick={()=>ref.current?.click()}>{value?<img src={value}/>:<CircleUserRound size={45}/>}<span><Camera size={15}/></span></button><input ref={ref} type="file" accept="image/*" hidden onChange={e=>{const f=e.target.files?.[0];if(f){const r=new FileReader();r.onload=()=>onChange(String(r.result));r.readAsDataURL(f)}}}/><div><b>Profile photo</b><p>Choose an image. A circular preview is applied; production deployments should add server-side processing and validation.</p>{value&&<button className="text-btn" onClick={()=>onChange("")}>Remove</button>}</div></div>
-}
-
-function AppHeader({tab,profile,partnerOnline,setPartnerOnline,toast,haptic}:{tab:Tab,profile:any,partnerOnline:boolean,setPartnerOnline:(b:boolean)=>void,toast:any,haptic:any}) {
-  return <header className="app-header"><div className="partner"><div className="avatar small">{profile.avatar?<img src={profile.avatar}/>:<span>O</span>}</div><div><b>{profile.name||"Your partner"}</b><span onClick={()=>{setPartnerOnline(!partnerOnline);haptic("light");toast(partnerOnline?"Presence set offline":"Presence set online","info")}}><i className={partnerOnline?"online-dot":""}/>{partnerOnline?"Online":"Offline"}</span></div></div>
-  <div className="header-actions"><button className="icon-btn" onClick={()=>toast("Voice call needs signaling + a peer","info")}><Phone size={18}/></button><button className="icon-btn" onClick={()=>toast("Video call needs signaling + a peer","info")}><Video size={18}/></button><button className="icon-btn"><MoreHorizontal size={19}/></button></div></header>
-}
-
-function BottomNav({tab,setTab}:{tab:Tab,setTab:(t:Tab)=>void}) {
-  const items:[Tab,string,any][]=[["chat","Chat",MessageCircle],["games","Play",Gamepad2],["media","Media",ImageIcon],["profile","You",CircleUserRound]];
-  return <nav className="bottom-nav">{items.map(([id,label,I])=><button className={tab===id?"active":""} key={id} onClick={()=>setTab(id)}><I size={19}/><span>{label}</span></button>)}</nav>
-}
-
-function Chat({messages,setMessages,toast,haptic,media,setMedia}:{messages:Message[],setMessages:any,toast:any,haptic:any,media:MediaItem[],setMedia:any}) {
-  const [text,setText]=useState(""); const [reply,setReply]=useState<string>(); const end=useRef<HTMLDivElement>(null);
-  useEffect(()=>end.current?.scrollIntoView({behavior:"smooth"}),[messages.length]);
-  const send=()=>{if(!text.trim())return;const m={id:uid(),text:text.trim(),time:timeNow(),status:"sent" as const,mine:true,reply};setMessages((v:Message[])=>[...v,m]);setText("");setReply(undefined);haptic("light");toast("Message sent","success");setTimeout(()=>setMessages((v:Message[])=>v.map(x=>x.id===m.id?{...x,status:"delivered"}:x)),500);setTimeout(()=>setMessages((v:Message[])=>v.map(x=>x.id===m.id?{...x,status:"read"}:x)),1300)};
-  const attach=(file:File)=>{if(file.type.startsWith("image/")){const r=new FileReader();r.onload=()=>{const item={id:uid(),name:file.name,url:String(r.result),type:"image" as const,from:"You",time:timeNow()};setMedia((v:MediaItem[])=>[item,...v]);setMessages((v:Message[])=>[...v,{id:uid(),text:"📷 Photo shared",time:timeNow(),status:"read",mine:true}]);toast("Photo sent","success");haptic("success")};r.readAsDataURL(file)}else{setMessages((v:Message[])=>[...v,{id:uid(),text:`📎 ${file.name} (${Math.round(file.size/1024)} KB)`,time:timeNow(),status:"sent",mine:true}]);toast("File attached","success");haptic("success")}};
-  return <section className="chat"><div className="chat-banner"><div className="secure-pill"><ShieldCheck size={14}/> Local demo session</div><span>Not E2E encrypted</span></div><div className="messages">{messages.map(m=><div key={m.id} className={`message-row ${m.mine?"mine":""}`} onContextMenu={e=>{e.preventDefault();setReply(m.text)}}><div className="bubble">{m.reply&&<div className="reply-preview">{m.reply}</div>}<span>{m.text}</span><small>{m.time} {m.mine&&(m.status==="read"?<CheckCheck size={13}/>:<Check size={13}/>)}</small></div></div>)}<div ref={end}/></div>
-  {reply&&<div className="reply-bar"><span>Replying to <b>{reply.slice(0,42)}</b></span><button className="icon-btn" onClick={()=>setReply(undefined)}><X size={16}/></button></div>}
-  <div className="composer"><label className="icon-btn" aria-label="Attach photo"><ImageIcon size={19}/><input hidden type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(f)attach(f)}}/></label><label className="icon-btn" aria-label="Attach file"><Paperclip size={19}/><input hidden type="file" onChange={e=>{const f=e.target.files?.[0];if(f)attach(f)}}/></label><input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&(e.preventDefault(),send())} placeholder="Write a message…" aria-label="Message"/><button className={`send ${text.trim()?"ready":""}`} onClick={send} aria-label="Send"><Send size={18}/></button></div></section>
-}
-
-function Media({media,toast}:{media:MediaItem[],toast:any}) {
-  return <section className="page"><div className="page-title"><div><div className="eyebrow">SHARED SPACE</div><h2>Media & files</h2></div><button className="icon-btn"><Search size={18}/></button></div>{media.length===0?<div className="empty"><div className="empty-icon"><ImageIcon/></div><h3>No shared media yet</h3><p>Photos and files you send from chat appear here.</p></div>:<div className="media-grid">{media.map(m=>m.type==="image"?<div className="media-card" key={m.id}><img src={m.url}/><div><b>{m.name}</b><span>{m.from} · {m.time}</span></div></div>:<div className="file-card" key={m.id}><FileText/><div><b>{m.name}</b><span>{m.from} · {m.time}</span></div><button className="icon-btn" onClick={()=>toast("Download is available for generated file URLs","info")}><Download size={16}/></button></div>)}</div>}</section>
-}
-
-function Profile({profile,setProfile,room,toast,copy}:{profile:any,setProfile:any,room:string,toast:any,copy:any}) {
-  return <section className="page"><div className="page-title"><div><div className="eyebrow">ACCOUNT</div><h2>Your profile</h2></div><button className="icon-btn" onClick={()=>toast("Settings panel ready for backend preferences","info")}><Settings size={18}/></button></div><div className="profile-hero"><div className="avatar profile">{profile.avatar?<img src={profile.avatar}/>:<span>{(profile.name||"O").slice(0,1).toUpperCase()}</span>}</div><h3>{profile.name||"Unnamed"}</h3><span className="status-line"><i className="online-dot"/> Available</span></div><div className="settings-list"><div><span>Private code</span><b>{profile.code}</b><button onClick={()=>copy(profile.code,"Private code")}><Copy size={16}/></button></div><div><span>Room</span><b>{room}</b><button onClick={()=>copy(room,"Room ID")}><Copy size={16}/></button></div><div><span>Security</span><b>Frontend demo / no E2E claim</b><ShieldCheck size={17}/></div></div><div className="notice"><LockKeyhole size={18}/><div><b>Production security note</b><p>For real private messaging, add authenticated identity, key exchange, audited cryptography, secure storage, server authorization, and transport protections.</p></div></div></section>
-}
-
-function Games({toast,haptic}:{toast:any,haptic:any}) {
-  const [game,setGame]=useState<"hub"|"ludo"|"carrom">("hub");
-  if(game==="ludo") return <Ludo onBack={()=>setGame("hub")} toast={toast} haptic={haptic}/>;
-  if(game==="carrom") return <Carrom onBack={()=>setGame("hub")} toast={toast} haptic={haptic}/>;
-  return <section className="page"><div className="page-title"><div><div className="eyebrow">ARCADE</div><h2>Play together</h2></div><div className="game-status"><span className="online-dot"/> Local</div></div><p className="muted">Playable local games. Multiplayer synchronization requires a realtime backend; these games never pretend a remote player is connected.</p><div className="game-cards"><button className="game-card ludo-card" onClick={()=>{haptic("medium");setGame("ludo");toast("Ludo started","success")}}><div className="game-icon"><Gamepad2/></div><div><h3>Ludo</h3><p>Dice, tokens, captures, safe zones & win state.</p></div><ChevronRight/></button><button className="game-card carrom-card" onClick={()=>{haptic("medium");setGame("carrom");toast("Carrom started","success")}}><div className="game-icon"><Zap/></div><div><h3>Carrom</h3><p>Touch/mouse striker, collisions, pockets & scoring.</p></div><ChevronRight/></button></div></section>
-}
-
-type Token={id:string;player:number;pos:number;finished:boolean};
-function Ludo({onBack,toast,haptic}:{onBack:()=>void,toast:any,haptic:any}) {
-  const [turn,setTurn]=useState(0),[dice,setDice]=useState(1),[rolling,setRolling]=useState(false),[winner,setWinner]=useState<number|null>(null);
-  const [tokens,setTokens]=useState<Token[]>(()=>[0,1].flatMap(p=>[0,1,2,3].map(i=>({id:`${p}-${i}`,player:p,pos:0,finished:false}))));
-  const roll=()=>{if(rolling||winner!==null)return;setRolling(true);haptic("light");let n=0;const timer=setInterval(()=>{setDice(1+Math.floor(Math.random()*6));if(++n>8){clearInterval(timer);const d=1+Math.floor(Math.random()*6);setDice(d);setRolling(false);toast(`Player ${turn+1} rolled ${d}`,"info");if(d!==6)setTurn(t=>t?0:1)}},70)};
-  const move=(t:Token)=>{if(rolling||winner!==null||t.player!==turn)return;if(dice!==6&&t.pos===0){toast("Roll a 6 to leave base","info");return}const np=Math.min(57,t.pos+dice);setTokens(v=>v.map(x=>x.id===t.id?{...x,pos:np,finished:np>=57}:x));haptic("medium");toast(np>=57?"Token reached home":"Token moved","success");if(np>=57){const count=tokens.filter(x=>x.player===turn&&x.id!==t.id&&x.finished).length;if(count>=3)setWinner(turn)}else if(dice!==6)setTurn(t=>t?0:1)};
-  const cell=(t:Token)=>{const x=t.pos===0?(t.player?80:20):8+((t.pos-1)%12)*7.0;const y=t.pos===0?(t.player?20:80):20+Math.floor((t.pos-1)/12)*12;return {left:`${x}%`,top:`${y}%`}};
-  return <section className="game-screen"><div className="game-top"><button className="icon-btn" onClick={onBack}><ArrowLeft/></button><div><span>LUDO</span><b>Player {turn+1}'s turn</b></div><button className="ghost" onClick={()=>{setTokens([0,1].flatMap(p=>[0,1,2,3].map(i=>({id:`${p}-${i}`,player:p,pos:0,finished:false}))));setWinner(null);setTurn(0);setDice(1);toast("Game restarted","info")}}>Restart</button></div><div className="ludo-board"><div className="ludo-cross"><div/><div/><div/><div/><div/></div>{[0,1].map(p=><div className={`ludo-base base-${p}`} key={p}><span>{p?"P2":"P1"}</span>{[0,1,2,3].map(i=><button className={`token t${i}`} key={i} style={tokens.find(t=>t.id===`${p}-${i}`)?.pos?cell(tokens.find(t=>t.id===`${p}-${i}`)!):undefined} onClick={()=>move(tokens.find(t=>t.id===`${p}-${i}`)!)}>{i+1}</button>)}</div>)}<div className="ludo-center">HOME</div></div><div className="dice-area"><button className={`dice ${rolling?"rolling":""}`} onClick={roll} aria-label="Roll dice">{dice}</button><p>{winner!==null?`Player ${winner+1} wins!`:rolling?"Rolling…":"Tap the die to roll"}</p></div></section>
-}
-
-function Carrom({onBack,toast,haptic}:{onBack:()=>void,toast:any,haptic:any}) {
-  const canvas=useRef<HTMLCanvasElement>(null), [score,setScore]=useState([0,0]), [turn,setTurn]=useState(0), [running,setRunning]=useState(false);
-  const [coins,setCoins]=useState(()=>Array.from({length:8},(_,i)=>({x:0,y:0,active:true,id:i})));
-  const striker=useRef({x:0,y:0,vx:0,vy:0});
-  useEffect(()=>{const c=canvas.current;if(!c)return;const ctx=c.getContext("2d")!;let raf=0;const resize=()=>{const d=Math.min(2,devicePixelRatio||1),r=c.getBoundingClientRect();c.width=r.width*d;c.height=r.height*d;ctx.setTransform(d,0,0,d,0,0);coins.forEach((q,i)=>{if(!q.x){q.x=r.width/2+(i%4-1.5)*24;q.y=r.height/2+(Math.floor(i/4)-.5)*24}});striker.current.x=r.width/2;striker.current.y=r.height-55};resize();window.addEventListener("resize",resize);
-    const loop=()=>{const r=c.getBoundingClientRect();ctx.clearRect(0,0,r.width,r.height);ctx.fillStyle="#d6b27a";ctx.fillRect(0,0,r.width,r.height);ctx.strokeStyle="#4c3324";ctx.lineWidth=3;ctx.strokeRect(14,14,r.width-28,r.height-28);ctx.beginPath();ctx.arc(r.width/2,r.height/2,52,0,Math.PI*2);ctx.stroke();[[30,30],[r.width-30,30],[30,r.height-30],[r.width-30,r.height-30]].forEach(([x,y])=>{ctx.fillStyle="#2a1a15";ctx.beginPath();ctx.arc(x,y,10,0,Math.PI*2);ctx.fill()});
-      coins.forEach(q=>{if(!q.active)return;ctx.fillStyle=q.id===0?"#111":"#eee";ctx.beginPath();ctx.arc(q.x,q.y,9,0,Math.PI*2);ctx.fill();ctx.strokeStyle="#8d725a";ctx.stroke()});ctx.fillStyle="#c48b45";ctx.beginPath();ctx.arc(striker.current.x,striker.current.y,14,0,Math.PI*2);ctx.fill();ctx.stroke();if(running){striker.current.x+=striker.current.vx;striker.current.y+=striker.current.vy;striker.current.vx*=.985;striker.current.vy*=.985;if(Math.hypot(striker.current.vx,striker.current.vy)<.08){setRunning(false);setTurn(t=>t?0:1)};coins.forEach(q=>{if(q.active&&Math.hypot(q.x-striker.current.x,q.y-striker.current.y)<20){q.active=false;setScore(s=>{const n=[...s];n[turn]++;return n});toast("Coin pocketed!","success");haptic("success")}})}raf=requestAnimationFrame(loop)};loop();return()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",resize)}},[running,coins,turn]);
-  const shoot=(e:React.PointerEvent)=>{if(running)return;const c=canvas.current!,r=c.getBoundingClientRect();const dx=e.clientX-r.left-striker.current.x,dy=e.clientY-r.top-striker.current.y;const mag=Math.min(18,Math.hypot(dx,dy)/8);striker.current.vx=-dx/Math.max(1,Math.hypot(dx,dy))*mag;striker.current.vy=-dy/Math.max(1,Math.hypot(dx,dy))*mag;setRunning(true);haptic("medium");toast("Striker launched","info")};
-  return <section className="game-screen"><div className="game-top"><button className="icon-btn" onClick={onBack}><ArrowLeft/></button><div><span>CARROM</span><b>P{turn+1} · {score[0]} — {score[1]}</b></div><button className="ghost" onClick={()=>{setScore([0,0]);setTurn(0);setCoins(Array.from({length:8},(_,i)=>({x:0,y:0,active:true,id:i})));toast("Board reset","info")}}>Restart</button></div><div className="carrom-wrap"><canvas ref={canvas} onPointerUp={shoot} aria-label="Carrom board; release pointer to shoot"/></div><p className="game-help">Aim by pressing and releasing toward the direction you want the striker to travel. This is a lightweight canvas physics implementation for the browser.</p></section>
-}
-
-function AppRoot(){return <App/>}
-createRoot(document.getElementById("root")!).render(<React.StrictMode><AppRoot/></React.StrictMode>);
+function Toasts({items}:{items:Toast[]}){return <div className="toasts" aria-live="polite">{items.map(t=><div className={`toast ${t.kind}`} key={t.id}><span>{t.kind==='success'?<Check/>:t.kind==='error'?<X/>:<Zap/>}</span>{t.text}</div>)}</div>}
+function callSignal(payload:any){(window as any).__lastCallSignal=payload}
+createRoot(document.getElementById('root')!).render(<App/>);
