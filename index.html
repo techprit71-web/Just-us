@@ -1,32 +1,39 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#0a0a14">
-  <meta name="description" content="Just Us — a private space for two.">
-  <title>Just Us ♡</title>
-  <link rel="stylesheet" href="styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b12">
+<meta name="description" content="Just Us — a private space for two.">
+<title>Just Us ♡</title>
+<link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <a class="brand" href="#" data-action="home">Just Us <span>♡</span></a>
+<div class="app-shell">
+  <header class="topbar">
+    <a class="brand" href="#" data-action="home">Just Us <span>♡</span></a>
+    <div class="top-actions">
+      <button class="icon-btn" id="settingsBtn" aria-label="Settings">⚙</button>
       <div class="status-pill"><i></i><span id="topStatus">private space</span></div>
-    </header>
-
-    <main id="app" class="page" aria-live="polite"></main>
-
-    <nav class="bottom-nav" aria-label="Main navigation">
-      <button class="nav-item active" data-nav="home"><span>⌂</span><small>Home</small></button>
-      <button class="nav-item" data-nav="chat"><span>♡</span><small>Chat</small></button>
-      <button class="nav-item" data-nav="moments"><span>✦</span><small>Moments</small></button>
-      <button class="nav-item" data-nav="play"><span>◉</span><small>Play</small></button>
-    </nav>
+    </div>
+  </header>
+  <main id="app" class="page" aria-live="polite"></main>
+  <nav class="bottom-nav" aria-label="Main navigation">
+    <button class="nav-item active" data-nav="home"><span>⌂</span><small>Home</small></button>
+    <button class="nav-item" data-nav="chat"><span>♡</span><small>Chat</small></button>
+    <button class="nav-item" data-nav="moments"><span>✦</span><small>Moments</small></button>
+    <button class="nav-item" data-nav="play"><span>◉</span><small>Play</small></button>
+  </nav>
+</div>
+<div id="cropModal" class="modal hidden" aria-hidden="true">
+  <div class="modal-card crop-card">
+    <div class="modal-head"><div><b>Crop profile photo</b><span>Move the image to frame it</span></div><button class="icon-btn" id="closeCrop">×</button></div>
+    <div class="crop-stage"><img id="cropImage" alt="Crop preview"></div>
+    <div class="crop-actions"><button class="secondary" id="cancelCrop">Cancel</button><button class="primary" id="saveCrop">Use photo</button></div>
   </div>
-
-  <div id="toast" class="toast" role="status"></div>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+</div>
+<div id="toast" class="toast" role="status"></div>
+<script src="config.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
